@@ -36,6 +36,10 @@ pub struct VoiceConfig {
     pub stt_language: String,
     pub voice_tts_models: HashMap<String, String>,
     pub audio_device: String,
+    /// ALSA playback device for TTS output (USB headphone, HDMI, 3.5 mm).
+    /// May differ from `audio_device` when mic is on a separate card (e.g.
+    /// LyraT/I2S input + USB headphone output).
+    pub audio_output_device: String,
     pub sample_rate: u32,
     pub record_secs: u32,
     pub llm_model_path: String,
@@ -59,15 +63,15 @@ pub async fn run(
     max_history: usize,
     model_family: ModelFamily,
 ) -> Result<()> {
-    // Auto-detect audio device if not specified or set to "auto".
+    // Auto-detect capture device if not specified or set to "auto".
     let audio_device = if voice_cfg.audio_device.is_empty() || voice_cfg.audio_device == "auto" {
         match detect_audio_device().await {
             Some(dev) => {
-                tracing::info!(device = %dev, "auto-detected USB audio device");
+                tracing::info!(device = %dev, "auto-detected capture device");
                 dev
             }
             None => {
-                tracing::warn!("no USB audio device found, using plughw:0,0");
+                tracing::warn!("no capture device found, using plughw:0,0");
                 "plughw:0,0".to_string()
             }
         }
@@ -75,7 +79,39 @@ pub async fn run(
         voice_cfg.audio_device.clone()
     };
 
-    eprintln!("[voice] Audio device: {}", audio_device);
+    // Auto-detect playback device. Uses a separate helper-script invocation
+    // with output=1 so it prefers USB audio (headphone/headset) over the
+    // capture-only LyraT I2S path.
+    let audio_output_device = if voice_cfg.audio_output_device.is_empty()
+        || voice_cfg.audio_output_device == "auto"
+    {
+        match detect_audio_output_device().await {
+            Some(dev) => {
+                tracing::info!(device = %dev, "auto-detected playback device");
+                dev
+            }
+            None => {
+                tracing::warn!("no playback device found, falling back to 'default'");
+                "default".to_string()
+            }
+        }
+    } else {
+        voice_cfg.audio_output_device.clone()
+    };
+
+    eprintln!(
+        "[voice] Capture device: {}  |  Playback device: {}",
+        audio_device, audio_output_device
+    );
+
+    // Persist the resolved playback device in the config so downstream
+    // tts_engine_for_language and play_wake_tone (which read from voice_cfg)
+    // see the actually-bound device instead of the unresolved "auto" / "".
+    let voice_cfg = {
+        let mut cfg = voice_cfg;
+        cfg.audio_output_device = audio_output_device.clone();
+        cfg
+    };
 
     let stt_engine = if voice_cfg.whisper_port > 0 {
         tracing::info!(
@@ -468,6 +504,46 @@ async fn run_push_to_talk(
     Ok(())
 }
 
+/// Auto-detect the ALSA playback device. Prefers USB audio (headphone /
+/// headset) over the Tegra APE / I2S frontend (which is usually capture-only
+/// on a LyraT-style setup).
+async fn detect_audio_output_device() -> Option<String> {
+    const DETECT_SCRIPT: &str = "/opt/geniepod/bin/detect-audio-device.sh";
+
+    if tokio::fs::metadata(DETECT_SCRIPT).await.is_ok() {
+        // Pass --output so the script returns a sink-suitable device
+        // (skipping LyraT/APE which our firmware leaves capture-only).
+        match Command::new(DETECT_SCRIPT).arg("--output").output().await {
+            Ok(out) if out.status.success() => {
+                let dev = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !dev.is_empty() {
+                    return Some(dev);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::debug!(error = %e, "detect-audio-device.sh --output failed"),
+        }
+    }
+
+    // In-process fallback: scan /proc/asound/cards for USB audio.
+    let cards = tokio::fs::read_to_string("/proc/asound/cards").await.ok()?;
+    for line in cards.lines() {
+        let line_lower = line.to_lowercase();
+        if line_lower.contains("usb-audio")
+            || line_lower.contains("usb audio")
+            || line_lower.contains("lenovo")
+            || line_lower.contains("headphone")
+            || line_lower.contains("headset")
+        {
+            let card_num = line.split_whitespace().next()?;
+            if let Ok(num) = card_num.parse::<u32>() {
+                return Some(format!("plughw:{},0", num));
+            }
+        }
+    }
+    None
+}
+
 /// Auto-detect the ALSA capture device.
 ///
 /// First delegates to `/opt/geniepod/bin/detect-audio-device.sh` when present
@@ -525,6 +601,7 @@ fn clone_voice_config(cfg: &VoiceConfig) -> VoiceConfig {
         stt_language: cfg.stt_language.clone(),
         voice_tts_models: cfg.voice_tts_models.clone(),
         audio_device: cfg.audio_device.clone(),
+        audio_output_device: cfg.audio_output_device.clone(),
         sample_rate: cfg.sample_rate,
         record_secs: cfg.record_secs,
         llm_model_path: cfg.llm_model_path.clone(),
@@ -537,7 +614,7 @@ fn clone_voice_config(cfg: &VoiceConfig) -> VoiceConfig {
 
 fn tts_engine_for_language(
     voice_cfg: &VoiceConfig,
-    audio_device: &str,
+    _audio_device: &str,
     language: Option<&str>,
 ) -> tts::TtsEngine {
     let model = crate::voice::language::select_tts_model(
@@ -545,10 +622,14 @@ fn tts_engine_for_language(
         &voice_cfg.voice_tts_models,
         &voice_cfg.piper_model,
     );
+    // TTS always uses the playback device, not the capture device. The
+    // `_audio_device` parameter is kept for call-site compatibility; the
+    // playback device is read directly from voice_cfg.audio_output_device,
+    // which voice_loop::run() has already resolved (auto-detect or config).
     tts::TtsEngine::configured(
         model,
         &voice_cfg.piper_path,
-        audio_device,
+        &voice_cfg.audio_output_device,
         voice_cfg.piper_pipe_mode,
     )
 }

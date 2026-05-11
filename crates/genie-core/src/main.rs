@@ -188,6 +188,7 @@ async fn main() -> Result<()> {
                 .map(|(language, path)| (language.clone(), path.to_string_lossy().to_string()))
                 .collect(),
             audio_device: config.core.audio_device.clone(),
+            audio_output_device: config.core.audio_output_device.clone(),
             sample_rate: config.core.audio_sample_rate,
             record_secs: config.core.voice_record_secs,
             llm_model_path: config.core.llm_model_path.to_string_lossy().to_string(),

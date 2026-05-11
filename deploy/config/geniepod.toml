@@ -33,11 +33,21 @@ piper_path = "/opt/geniepod/piper/piper"
 piper_pipe_mode = false           # true = long-running subprocess (lower latency).
 max_history_turns = 20
 expected_runtime_contract_hash = ""  # Optional: pin after a known-good boot to detect prompt/tool/policy drift.
-audio_device = "auto"             # Auto-detect: prefers Tegra APE (LyraT/I2S2) if routed,
+audio_device = "auto"             # CAPTURE/microphone device.
+                                  # Auto-detect: prefers Tegra APE (LyraT/I2S2) if routed,
                                   # falls back to USB audio, then card 0. Override examples:
                                   #   "plughw:APE,0"  — LyraT/I2S2 (see doc/lyrat-jetson-audio.md)
                                   #   "plughw:0,0"   — first card
                                   #   "plughw:2,0"   — explicit USB card index
+audio_output_device = "auto"      # PLAYBACK/speaker device for TTS output.
+                                  # Auto-detect: prefers USB audio (headphone/headset),
+                                  # then Tegra HDA (HDMI / 3.5 mm), then "default".
+                                  # NEVER auto-resolves to the LyraT/APE card because the
+                                  # LyraT firmware leaves the DAC side undriven. Override
+                                  # for explicit routing:
+                                  #   "plughw:1,0"   — USB headphone on card 1
+                                  #   "default"      — ALSA system default sink
+                                  #   "hdmi:CARD=tegrahda,DEV=0" — HDMI named device
 audio_sample_rate = 48000         # USB headphone native sample rate. LyraT outputs 48 kHz,
                                   # ALSA plughw downmixes/resamples to whatever record_audio asks.
 voice_enabled = true              # Voice mode on by default in alpha.5 (push-to-talk).

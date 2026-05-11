@@ -1,14 +1,53 @@
 #!/bin/bash
-# Detect the audio capture device and emit the ALSA device string for
-# `arecord -D <...>`. Used by genie-core when `audio_device = "auto"`.
+# Detect an ALSA audio device. Used by genie-core when audio_device or
+# audio_output_device is set to "auto" in /etc/geniepod/geniepod.toml.
 #
-# Priority order:
+# Usage:
+#   detect-audio-device.sh             # capture (mic) — default
+#   detect-audio-device.sh --output    # playback (TTS, wake-tone)
+#
+# Capture priority order:
 #   1. Tegra APE card with I2S2 controls present AND ADMAIF1 Mux set to I2S2
-#      (i.e. an external I2S frontend such as ESP32-LyraT on the 40-pin header,
-#      see doc/lyrat-jetson-audio.md). Emits "plughw:APE,0".
-#   2. A USB audio card (Lenovo E03, headsets, generic USB-Audio). Emits
-#      "plughw:<N>,0".
+#      (i.e. an external I2S frontend such as ESP32-LyraT on the 40-pin
+#      header, see doc/lyrat-jetson-audio.md). Emits "plughw:APE,0".
+#   2. A USB audio card (Lenovo E03, headsets, generic USB-Audio, headphone,
+#      microphone). Emits "plughw:<N>,0".
 #   3. Fallback to "plughw:0,0".
+#
+# Playback priority order (--output):
+#   1. A USB audio card / headphone / headset (typical TTS sink).
+#   2. Tegra HDA on-board card (HDMI / 3.5 mm jack on Jetson devkit).
+#   3. Fallback to "default" (ALSA system default, usually card 0).
+#   NEVER returns the LyraT/APE card for output — our LyraT firmware
+#   leaves the DAC side undriven and routes only ADC data on JP4.
+
+MODE="${1:-capture}"
+case "$MODE" in
+    --output|output|out) MODE=output ;;
+    *)                   MODE=capture ;;
+esac
+
+if [ "$MODE" = "output" ]; then
+    # 1. Prefer USB audio for output.
+    CARD=$(cat /proc/asound/cards 2>/dev/null | grep -i "USB-Audio\|USB Audio\|Lenovo\|Headphone\|Headset" | head -1 | awk '{print $1}')
+    if [ -n "$CARD" ]; then
+        echo "plughw:${CARD},0"
+        exit 0
+    fi
+
+    # 2. Tegra HDA (HDMI / built-in audio) as second choice.
+    CARD=$(cat /proc/asound/cards 2>/dev/null | grep -i "tegra-hda\|HDA\b" | grep -vi "ape" | head -1 | awk '{print $1}')
+    if [ -n "$CARD" ]; then
+        echo "plughw:${CARD},0"
+        exit 0
+    fi
+
+    # 3. Fallback.
+    echo "default"
+    exit 0
+fi
+
+# --- capture mode (default) ---
 
 # 1. Prefer APE/I2S2 when the AHUB route is already configured for external
 #    capture. We check ADMAIF1 Mux's current item rather than just the

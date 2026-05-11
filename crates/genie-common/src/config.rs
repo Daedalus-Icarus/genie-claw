@@ -95,9 +95,19 @@ pub struct CoreConfig {
     #[serde(default)]
     pub voice_tts_models: HashMap<String, PathBuf>,
 
-    /// ALSA audio device for mic/speaker (e.g. "plughw:0,0").
+    /// ALSA capture device for the microphone (e.g. "plughw:APE,0" on Jetson
+    /// with a LyraT I2S frontend, or "plughw:N,0" for a USB mic). "auto"
+    /// runs the helper script which prefers Tegra APE then USB then card 0.
     #[serde(default = "defaults::audio_device")]
     pub audio_device: String,
+
+    /// ALSA playback device for TTS output. Often different from `audio_device`
+    /// when the mic is on one card (e.g. LyraT/I2S) and the speaker on another
+    /// (e.g. USB headphone, HDMI, 3.5 mm jack). Use "default" for the system
+    /// default sink, "plughw:N,0" for a specific card, or "auto" to run the
+    /// helper script with a USB-output preference.
+    #[serde(default = "defaults::audio_output_device")]
+    pub audio_output_device: String,
 
     /// Audio capture sample rate (Hz). USB headphones typically need 48000.
     #[serde(default = "defaults::audio_sample_rate")]
@@ -162,6 +172,7 @@ impl Default for CoreConfig {
             stt_language: defaults::stt_language(),
             voice_tts_models: HashMap::new(),
             audio_device: defaults::audio_device(),
+            audio_output_device: defaults::audio_output_device(),
             audio_sample_rate: defaults::audio_sample_rate(),
             voice_enabled: false,
             voice_record_secs: defaults::voice_record_secs(),
@@ -1190,6 +1201,9 @@ mod defaults {
     }
     pub fn stt_language() -> String {
         "auto".into()
+    }
+    pub fn audio_output_device() -> String {
+        "auto".to_string()
     }
     pub fn audio_device() -> String {
         "auto".into()
