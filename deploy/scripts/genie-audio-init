@@ -56,7 +56,16 @@ log "configuring ${CARD} I2S2 → ADMAIF1 capture route"
 set_ctrl "ADMAIF1 Mux"                       "I2S2"
 set_ctrl "I2S2 codec master mode"            "cbm-cfm"   # external master drives BCLK + LRCK
 set_ctrl "I2S2 codec frame mode"             "i2s"       # Philips I2S framing
-set_ctrl "I2S2 Sample Rate"                  "48000"
+# I2S2 Sample Rate must match the LyraT wire LRCK frequency. The LyraT
+# firmware (examples/recorder/lyrat_jp4_passthrough/) configures the ESP32
+# I2S for 48 kHz, but ESP-IDF's I2S driver on this board+rate combo emits
+# 24 kHz LRCK on the wire (confirmed empirically: setting Jetson side to
+# 48 kHz produces 2x-speed chipmunk playback; setting to 24 kHz produces
+# natural pitch). 24 kHz keeps Nyquist at 12 kHz which is still well
+# above the speech band; whisper-server resamples to 16 kHz internally.
+# Investigating the ESP-IDF clock divider behavior is tracked as future
+# alpha.6 work — see doc/lyrat-jetson-audio.md.
+set_ctrl "I2S2 Sample Rate"                  "24000"
 set_ctrl "I2S2 Capture Audio Channels"       "2"
 set_ctrl "I2S2 Capture Audio Bit Format"     "16"
 set_ctrl "I2S2 Client Channels"              "2"

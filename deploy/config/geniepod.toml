@@ -48,8 +48,13 @@ audio_output_device = "auto"      # PLAYBACK/speaker device for TTS output.
                                   #   "plughw:1,0"   — USB headphone on card 1
                                   #   "default"      — ALSA system default sink
                                   #   "hdmi:CARD=tegrahda,DEV=0" — HDMI named device
-audio_sample_rate = 48000         # USB headphone native sample rate. LyraT outputs 48 kHz,
-                                  # ALSA plughw downmixes/resamples to whatever record_audio asks.
+audio_sample_rate = 16000         # Whisper's native rate; record_audio's `arecord -r ...`
+                                  # value. ALSA `plughw:APE,0` downmixes/resamples from
+                                  # whatever the AHUB delivers (currently 24 kHz LRCK on
+                                  # the LyraT — see genie-audio-init for the wire-level
+                                  # rate quirk) to 16 kHz mono in one pass. Using 16 kHz
+                                  # here avoids a second resampling stage inside
+                                  # whisper-server.
 voice_enabled = true              # Voice mode on by default in alpha.5 (push-to-talk).
                                   # Set false on hosts without whisper/piper installed.
 voice_record_secs = 3             # Seconds to record per voice interaction. Most

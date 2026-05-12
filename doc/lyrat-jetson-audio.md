@@ -192,6 +192,24 @@ Active beamforming (steered DAS / GCC-PHAT DOA / MVDR) is not used in this
 alpha. Both mics being verified-alive simply means the path is ready for
 it whenever a future release wants to add it.
 
+## Known wire-level rate quirk
+
+The LyraT JP4 firmware (`examples/recorder/lyrat_jp4_passthrough/` in
+`espressif/esp-adf`) configures ESP-IDF's I2S driver for 48 kHz, but on
+ESP32-LyraT V4.3 + ESP-IDF v5.5.3 the actual LRCK frequency on the
+wire is **24 kHz** (verified empirically: setting Jetson `I2S2 Sample
+Rate` to 48 kHz produces 2× chipmunk playback; 24 kHz produces natural
+pitch). Reason unknown — likely an APLL/MCLK divider constraint or
+slot-width fallback inside the ESP32 I2S clock generator.
+
+For alpha.5 the workaround is: tell the Jetson AHUB to expect 24 kHz.
+`genie-audio-init` writes `I2S2 Sample Rate = 24000` for this reason.
+Capture-side parameters in `[core]` (e.g. `audio_sample_rate = 16000`)
+work fine — ALSA `plughw:APE,0` downsamples 24 kHz → 16 kHz cleanly.
+
+Investigating the ESP-IDF clock setup so the LyraT actually emits 48 kHz
+LRCK as configured is tracked as alpha.6 work.
+
 ## Limitations / known gaps
 
 - Capture only. TTS playback goes through the Jetson's default audio sink
