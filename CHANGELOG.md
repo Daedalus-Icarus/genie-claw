@@ -12,6 +12,24 @@
   Wired into `setup-jetson.sh`'s enable loop so a fresh `make deploy` +
   reboot ends with the LLM already hot. Closes #3.
 
+### Changed
+
+- `genie-llm.service` now launches `llama-server` with a tighter context
+  window (`--ctx-size 2048`, down from 4096). On Orin Nano's 7.6 GB iGPU
+  this halves the KV-cache footprint and eases the eviction pressure that
+  was pushing `whisper-server`'s model out of GPU memory during long LLM
+  responses. Net effect: STT latency stops jumping from ~270 ms to ~3.6 s
+  across consecutive voice cycles. 2048-token context is comfortable for
+  command-style voice interactions (typical conversation history is well
+  under 1k tokens). Closes #2.
+
+  Quantized KV cache (`--cache-type-k q4_0 --cache-type-v q4_0`) was
+  intended as an additional ~570 MB win but currently crashes
+  `llama-server` with `GGML_ASSERT(ggml_is_contiguous(a)) failed` in
+  `ggml_reshape_2d` when combined with `--flash-attn on` and the Phi-3/
+  Phi-4 attention graph on aarch64 CUDA. Documented inline in the
+  service unit; tracked upstream in llama.cpp.
+
 ## 1.0.0-alpha.5 - 2026-05-11
 
 Alpha 5 is the voice-frontend release. It takes GenieClaw from a chat/HTTP
