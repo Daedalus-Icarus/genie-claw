@@ -4,6 +4,21 @@
 
 ### Added
 
+- `.github/workflows/ci.yml` — the fmt + clippy + test daily loop for
+  issue #34 (PR #37). Runs `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --locked -- -D warnings`, and
+  `cargo test --workspace --locked` (unit, integration, and doc tests) on
+  every push to `main` and every pull request. Each job uses
+  `Swatinem/rust-cache` with a per-job shared key so cached runs stay
+  short. Concurrency group cancels superseded runs on the same ref. CI
+  badge added at the top of the README. Bundles a `rustls-webpki`
+  0.103.12 → 0.103.13 lockfile bump for [RUSTSEC-2026-0104](https://rustsec.org/advisories/RUSTSEC-2026-0104)
+  (reachable panic in CRL parsing on the transitive HTTPS path via
+  `reqwest → hyper-rustls → rustls → rustls-webpki`), plus
+  `temp_memory` / `make_governor` test-isolation fixes
+  (`genie-core/src/memory/mod.rs`, `genie-governor/src/governor.rs`)
+  required for the new `cargo test --workspace` job to be stable under
+  parallel execution.
 - `voice` Cargo feature on `genie-core` and `genie-ctl` (issue #41).
   Default-on so `cargo build` produces today's Jetson-targeted binary
   unchanged. `cargo build -p genie-core --no-default-features` (and the
