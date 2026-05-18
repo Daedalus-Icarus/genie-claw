@@ -143,10 +143,7 @@ impl TelegramApi {
     /// critical section is just a HashMap insert/clone — no `.await` is held
     /// across it.
     fn chat_lock(&self, chat_id: i64) -> Arc<AsyncMutex<()>> {
-        let mut locks = self
-            .chat_locks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut locks = self.chat_locks.lock().unwrap_or_else(|e| e.into_inner());
         locks
             .entry(chat_id)
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
