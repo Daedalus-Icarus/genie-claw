@@ -2111,8 +2111,8 @@ mod tests {
         // Regression guard for the tokio::join! → tokio::select! (biased) fix:
         // when the consumer exits first (client disconnect), the producer must
         // be dropped immediately — not awaited to completion.
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         let producer_completed = Arc::new(AtomicBool::new(false));
         let flag = producer_completed.clone();
