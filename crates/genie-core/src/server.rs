@@ -294,7 +294,11 @@ async fn handle_request(stream: tokio::net::TcpStream, ctx: &ChatServer) -> Resu
         )
         .await
         {
-            tracing::error!(error = %e, "streaming chat failed");
+            if is_client_disconnect_error(&e) {
+                tracing::debug!(error = %e, "client closed connection during stream");
+            } else {
+                tracing::error!(error = %e, "streaming chat failed");
+            }
         }
         return Ok(());
     }
@@ -564,64 +568,75 @@ async fn handle_chat_stream(
     .await?;
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let producer = llm.chat_stream(&messages, Some(512), move |token| {
-        let _ = tx.send(token.to_string());
-    });
 
-    let consumer = async {
-        let mut state = StreamState {
-            mode: StreamMode::Undecided,
-            pending: String::new(),
-            emitted_text: false,
-        };
+    // Run producer and consumer in the same block so both are dropped — and
+    // their mutable borrow on `writer` released — before we write the final
+    // "done" event below.
+    let (llm_result, mut state) = {
+        let producer = llm.chat_stream(&messages, Some(512), move |token| {
+            let _ = tx.send(token.to_string());
+        });
 
-        while let Some(token) = rx.recv().await {
-            match state.mode {
-                StreamMode::Text => {
-                    write_stream_event(
-                        writer,
-                        &serde_json::json!({"type":"token","content": token}),
-                    )
-                    .await?;
-                    state.emitted_text = true;
-                }
-                StreamMode::Undecided | StreamMode::Tool => {
-                    state.pending.push_str(&token);
+        let consumer = async {
+            let mut state = StreamState {
+                mode: StreamMode::Undecided,
+                pending: String::new(),
+                emitted_text: false,
+            };
 
-                    if state.mode == StreamMode::Undecided {
-                        match detect_stream_mode(&state.pending) {
-                            StreamMode::Text => {
-                                write_stream_event(
-                                    writer,
-                                    &serde_json::json!({"type":"token","content": state.pending}),
-                                )
-                                .await?;
-                                state.pending.clear();
-                                state.mode = StreamMode::Text;
-                                state.emitted_text = true;
+            while let Some(token) = rx.recv().await {
+                match state.mode {
+                    StreamMode::Text => {
+                        write_stream_event(
+                            writer,
+                            &serde_json::json!({"type":"token","content": token}),
+                        )
+                        .await?;
+                        state.emitted_text = true;
+                    }
+                    StreamMode::Undecided | StreamMode::Tool => {
+                        state.pending.push_str(&token);
+
+                        if state.mode == StreamMode::Undecided {
+                            match detect_stream_mode(&state.pending) {
+                                StreamMode::Text => {
+                                    write_stream_event(
+                                        writer,
+                                        &serde_json::json!({"type":"token","content": state.pending}),
+                                    )
+                                    .await?;
+                                    state.pending.clear();
+                                    state.mode = StreamMode::Text;
+                                    state.emitted_text = true;
+                                }
+                                StreamMode::Tool => state.mode = StreamMode::Tool,
+                                StreamMode::Undecided => {}
                             }
-                            StreamMode::Tool => state.mode = StreamMode::Tool,
-                            StreamMode::Undecided => {}
                         }
                     }
                 }
             }
-        }
 
-        Ok::<StreamState, anyhow::Error>(state)
+            Ok::<StreamState, anyhow::Error>(state)
+        };
+
+        tokio::pin!(producer);
+        tokio::pin!(consumer);
+        // biased: arm 1 is always polled first. If producer is pending, tx is
+        // still alive, so consumer can only exit via a write error (client
+        // disconnect), not via a spurious rx-None race that would produce a
+        // false "stream cancelled" error.
+        let (llm_r, state_r) = tokio::select! {
+            biased;
+            llm_r = &mut producer => (llm_r, consumer.await),
+            state_r = &mut consumer => {
+                tracing::info!("client disconnected mid-stream; cancelling LLM producer");
+                (Err(anyhow::anyhow!("LLM stream cancelled")), state_r)
+            },
+        };
+        (llm_r, state_r?)
     };
 
-    tokio::pin!(producer);
-    tokio::pin!(consumer);
-    // biased: arm 1 is always polled first. If producer is pending, tx is still
-    // alive, so consumer can only exit via a write error (disconnect), not via a
-    // spurious rx-None race that would produce a false "stream cancelled" error.
-    let (llm_result, state_result) = tokio::select! {
-        biased;
-        llm_r = &mut producer => (llm_r, consumer.await),
-        state_r = &mut consumer => (Err(anyhow::anyhow!("LLM stream cancelled")), state_r),
-    };
-    let mut state = state_result?;
     let llm_response = llm_result?;
 
     let mut tool_name: Option<String> = None;
@@ -857,6 +872,20 @@ async fn finalize_tool_turn(
 
     let _ = conversations.append(conv_id, "assistant", &sanitized_summary, None);
     sanitized_summary
+}
+
+fn is_client_disconnect_error(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .map(|io| {
+                matches!(
+                    io.kind(),
+                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                )
+            })
+            .unwrap_or(false)
+    })
 }
 
 async fn write_stream_headers(writer: &mut OwnedWriteHalf, status: u16) -> Result<()> {
@@ -1849,7 +1878,7 @@ mod tests {
     use super::{
         ConnectivityState, StreamMode, detect_stream_mode, handle_actuation_actions, handle_health,
         handle_runtime_contract, handle_web_search, handle_web_search_status,
-        overall_health_status, should_summarize_tool_result,
+        is_client_disconnect_error, overall_health_status, should_summarize_tool_result,
     };
     use crate::connectivity::NullConnectivityController;
     use crate::conversation::ConversationStore;
@@ -2075,5 +2104,69 @@ mod tests {
         assert_eq!(status, 200);
         assert!(body.contains("duckduckgo"));
         assert!(body.contains("cache_entries"));
+    }
+
+    #[tokio::test]
+    async fn biased_select_cancels_slow_producer_on_consumer_exit() {
+        // Regression guard for the tokio::join! → tokio::select! (biased) fix:
+        // when the consumer exits first (client disconnect), the producer must
+        // be dropped immediately — not awaited to completion.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let producer_completed = Arc::new(AtomicBool::new(false));
+        let flag = producer_completed.clone();
+
+        let producer = async move {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            flag.store(true, Ordering::SeqCst);
+            Ok::<String, anyhow::Error>("never reached".into())
+        };
+
+        // Consumer exits immediately — simulates a broken-pipe write error.
+        let consumer = async { Err::<(), anyhow::Error>(anyhow::anyhow!("broken pipe")) };
+
+        let start = std::time::Instant::now();
+        tokio::pin!(producer);
+        tokio::pin!(consumer);
+        let (_llm_r, state_r) = tokio::select! {
+            biased;
+            llm_r = &mut producer => (llm_r, consumer.await),
+            state_r = &mut consumer => (Err(anyhow::anyhow!("LLM stream cancelled")), state_r),
+        };
+
+        assert!(
+            start.elapsed().as_millis() < 500,
+            "select must not block on slow producer after consumer exits"
+        );
+        assert!(state_r.is_err(), "consumer error must be propagated");
+        assert!(
+            !producer_completed.load(Ordering::SeqCst),
+            "producer must be cancelled (dropped), not allowed to complete"
+        );
+    }
+
+    #[test]
+    fn is_client_disconnect_error_detects_broken_pipe() {
+        use std::io;
+        let e = anyhow::Error::from(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
+        assert!(is_client_disconnect_error(&e));
+    }
+
+    #[test]
+    fn is_client_disconnect_error_detects_connection_reset() {
+        use std::io;
+        let e = anyhow::Error::from(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ));
+        assert!(is_client_disconnect_error(&e));
+    }
+
+    #[test]
+    fn is_client_disconnect_error_does_not_match_other_io_errors() {
+        use std::io;
+        let e = anyhow::Error::from(io::Error::new(io::ErrorKind::TimedOut, "timed out"));
+        assert!(!is_client_disconnect_error(&e));
     }
 }
