@@ -189,10 +189,7 @@ fn insert_health_log(db: &Connection, ts_ms: u64, status: &ServiceStatus) {
 }
 
 fn prune_health_log(db: &Connection, cutoff_ts_ms: u64) {
-    if let Err(e) = db.execute(
-        "DELETE FROM health_log WHERE ts_ms < ?1",
-        [cutoff_ts_ms],
-    ) {
+    if let Err(e) = db.execute("DELETE FROM health_log WHERE ts_ms < ?1", [cutoff_ts_ms]) {
         tracing::error!(
             cutoff_ts_ms,
             error = %e,
@@ -408,10 +405,8 @@ mod tests {
 
     #[test]
     fn health_log_insert_and_prune_on_writable_db() {
-        let dir = std::env::temp_dir().join(format!(
-            "genie-health-writable-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("genie-health-writable-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -446,7 +441,8 @@ mod tests {
     fn health_log_write_errors_do_not_panic_on_readonly_db() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join(format!("genie-health-readonly-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("genie-health-readonly-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -460,11 +456,8 @@ mod tests {
         perms.set_mode(0o444);
         std::fs::set_permissions(&db_path, perms).unwrap();
 
-        let db = Connection::open_with_flags(
-            &db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .unwrap();
+        let db = Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
 
         let status = ServiceStatus {
             name: "core".into(),
