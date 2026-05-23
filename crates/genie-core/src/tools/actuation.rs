@@ -341,13 +341,11 @@ impl AuditLogger {
         let mut actions = BufReader::new(file)
             .lines()
             .map_while(Result::ok)
-            .filter_map(|line| {
-                match serde_json::from_str::<AuditEvent>(&line) {
-                    Ok(event) => audit_event_to_recorded_action(event),
-                    Err(e) => {
-                        tracing::debug!(path = %path.display(), error = %e, "audit line parse failed");
-                        None
-                    }
+            .filter_map(|line| match serde_json::from_str::<AuditEvent>(&line) {
+                Ok(event) => audit_event_to_recorded_action(event),
+                Err(e) => {
+                    tracing::debug!(path = %path.display(), error = %e, "audit line parse failed");
+                    None
                 }
             })
             .collect::<Vec<_>>();
