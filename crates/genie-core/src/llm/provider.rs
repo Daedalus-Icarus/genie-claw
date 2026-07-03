@@ -23,6 +23,7 @@ pub struct OptionalProviderPlan {
     pub provider: OptionalAiProviderKind,
     pub auth_mode: OptionalAiProviderAuthMode,
     pub base_url: String,
+    pub model: String,
     pub api_key_env: String,
     pub oauth_token_env: String,
     pub context_window_tokens: u32,
@@ -39,6 +40,7 @@ impl OptionalProviderPlan {
             provider: config.provider,
             auth_mode: config.auth_mode,
             base_url: config.base_url.clone(),
+            model: config.model.clone(),
             api_key_env: config.api_key_env.clone(),
             oauth_token_env: config.oauth_token_env.clone(),
             context_window_tokens: config.context_window_tokens,
@@ -59,6 +61,9 @@ impl OptionalProviderPlan {
         }
         if self.base_url.trim().is_empty() {
             reasons.push("missing_base_url");
+        }
+        if self.model.trim().is_empty() {
+            reasons.push("missing_model");
         }
         if remote_url(&self.base_url) && !self.remote_allowed {
             reasons.push("remote_base_url_not_allowed");
@@ -111,6 +116,7 @@ fn blocked_reason_message(reason: &str) -> String {
                 .into()
         }
         "missing_base_url" => "[optional_ai_provider].base_url must be set when enabled".into(),
+        "missing_model" => "[optional_ai_provider].model must be set when enabled".into(),
         "remote_base_url_not_allowed" => {
             "[optional_ai_provider].base_url is remote; set allow_remote_base_url = true to opt in"
                 .into()
@@ -143,6 +149,7 @@ mod tests {
             provider: OptionalAiProviderKind::OpenAiCompatible,
             auth_mode: OptionalAiProviderAuthMode::ApiKey,
             base_url: "https://provider.example/v1".into(),
+            model: "gpt-4o-mini".into(),
             api_key_env: "GENIE_PROVIDER_KEY".into(),
             oauth_token_env: "GENIE_PROVIDER_OAUTH_TOKEN".into(),
             context_window_tokens: 8192,
@@ -166,6 +173,7 @@ mod tests {
             provider: OptionalAiProviderKind::OpenAiCompatible,
             auth_mode: OptionalAiProviderAuthMode::ApiKey,
             base_url: "http://127.0.0.1:11434/v1".into(),
+            model: "llama3.1:8b-instruct-q4_K_M".into(),
             api_key_env: "LOCAL_PROVIDER_KEY".into(),
             oauth_token_env: "LOCAL_PROVIDER_OAUTH_TOKEN".into(),
             context_window_tokens: 4096,
@@ -186,6 +194,7 @@ mod tests {
             provider: OptionalAiProviderKind::OpenAiCompatible,
             auth_mode: OptionalAiProviderAuthMode::ApiKey,
             base_url: "http://127.0.0.2:11434/v1".into(),
+            model: "llama3.1:8b-instruct-q4_K_M".into(),
             api_key_env: "LOCAL_PROVIDER_KEY".into(),
             oauth_token_env: "LOCAL_PROVIDER_OAUTH_TOKEN".into(),
             context_window_tokens: 4096,
@@ -206,6 +215,7 @@ mod tests {
             provider: OptionalAiProviderKind::OpenAiCompatible,
             auth_mode: OptionalAiProviderAuthMode::ApiKey,
             base_url: "http://127.evil.com:11434/v1".into(),
+            model: "llama3.1:8b-instruct-q4_K_M".into(),
             api_key_env: "LOCAL_PROVIDER_KEY".into(),
             oauth_token_env: "LOCAL_PROVIDER_OAUTH_TOKEN".into(),
             context_window_tokens: 4096,
@@ -226,6 +236,7 @@ mod tests {
             provider: OptionalAiProviderKind::OpenAi,
             auth_mode: OptionalAiProviderAuthMode::OAuthBearer,
             base_url: "https://api.openai.com/v1".into(),
+            model: "gpt-4o-mini".into(),
             api_key_env: String::new(),
             oauth_token_env: "OPENAI_OAUTH_ACCESS_TOKEN".into(),
             context_window_tokens: 4096,

@@ -350,6 +350,12 @@ pub struct OptionalAiProviderConfig {
     #[serde(default)]
     pub base_url: String,
 
+    /// Provider model id used for outbound OpenAI-compatible chat requests.
+    /// Required when `enabled = true` so the optional provider path is fully
+    /// parameterized instead of relying on a placeholder model name.
+    #[serde(default)]
+    pub model: String,
+
     /// Environment variable that contains the API key. The key value itself is
     /// never stored in config and is not included in support summaries.
     #[serde(default = "defaults::optional_ai_provider_api_key_env")]
@@ -415,6 +421,9 @@ impl OptionalAiProviderConfig {
         if self.base_url.trim().is_empty() {
             reasons.push("[optional_ai_provider].base_url must be set when enabled");
         }
+        if self.model.trim().is_empty() {
+            reasons.push("[optional_ai_provider].model must be set when enabled");
+        }
         if is_remote_url(&self.base_url) && !self.allow_remote_base_url {
             reasons.push(
                 "[optional_ai_provider].base_url is remote; set allow_remote_base_url = true to opt in",
@@ -464,6 +473,7 @@ impl Default for OptionalAiProviderConfig {
             provider: OptionalAiProviderKind::OpenAiCompatible,
             auth_mode: OptionalAiProviderAuthMode::ApiKey,
             base_url: String::new(),
+            model: String::new(),
             api_key_env: defaults::optional_ai_provider_api_key_env(),
             oauth_token_env: defaults::optional_ai_provider_oauth_token_env(),
             context_window_tokens: defaults::agent_context_window_tokens(),
@@ -1807,6 +1817,7 @@ impl Config {
                 "context_window_tokens": self.optional_ai_provider.context_window_tokens,
                 "limited_context_compatible": self.optional_ai_provider.limited_context_compatible(&self.agent),
                 "allow_remote_base_url": self.optional_ai_provider.allow_remote_base_url,
+                "model_configured": !self.optional_ai_provider.model.trim().is_empty(),
                 "api_key_env_configured": !self.optional_ai_provider.api_key_env.trim().is_empty(),
                 "oauth_token_env_configured": !self.optional_ai_provider.oauth_token_env.trim().is_empty(),
                 "base_url_configured": !self.optional_ai_provider.base_url.trim().is_empty(),
@@ -2082,6 +2093,7 @@ home_runtime_boundary = "external_runtime"
     fn validate_llm_provider_rejects_enabled_optional_provider_without_base_url() {
         let mut config = test_config();
         config.optional_ai_provider.enabled = true;
+        config.optional_ai_provider.model = "gpt-4o-mini".into();
         config.optional_ai_provider.base_url.clear();
         let err = config
             .optional_ai_provider
@@ -2092,11 +2104,26 @@ home_runtime_boundary = "external_runtime"
     }
 
     #[test]
+    fn validate_llm_provider_rejects_enabled_optional_provider_without_model() {
+        let mut config = test_config();
+        config.optional_ai_provider.enabled = true;
+        config.optional_ai_provider.base_url = "https://api.openai.com/v1".into();
+        config.optional_ai_provider.model.clear();
+        let err = config
+            .optional_ai_provider
+            .ensure_enabled_ready(&config.agent)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("model must be set"));
+    }
+
+    #[test]
     fn validate_llm_provider_rejects_unwired_optional_provider_kind() {
         let mut config = test_config();
         config.optional_ai_provider.enabled = true;
         config.optional_ai_provider.provider = OptionalAiProviderKind::Anthropic;
         config.optional_ai_provider.base_url = "http://127.0.0.1:11434/v1".into();
+        config.optional_ai_provider.model = "claude-sonnet-4-5".into();
         let err = config
             .optional_ai_provider
             .ensure_enabled_ready(&config.agent)
@@ -2114,6 +2141,7 @@ home_runtime_boundary = "external_runtime"
 enabled = true
 provider = "open_ai"
 base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
 api_key_env = "OPENAI_API_KEY"
 context_window_tokens = 8192
 allow_remote_base_url = true
@@ -2134,6 +2162,7 @@ enabled = true
 provider = "open_ai"
 auth_mode = "oauth_bearer"
 base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
 oauth_token_env = "OPENAI_OAUTH_ACCESS_TOKEN"
 context_window_tokens = 4096
 allow_remote_base_url = true
@@ -2154,6 +2183,7 @@ allow_remote_base_url = true
 enabled = true
 provider = "custom"
 base_url = "https://provider.example/v1"
+model = "example-model"
 api_key_env = "GENIE_PROVIDER_KEY"
 context_window_tokens = 4096
 allow_remote_base_url = false

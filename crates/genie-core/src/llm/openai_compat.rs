@@ -59,6 +59,7 @@ pub struct OpenAiCompatClient {
     host: String,
     port: u16,
     request_profile: RequestProfile,
+    model: String,
     timeouts: LlmTimeouts,
     auth: Option<AuthorizationHeader>,
 }
@@ -222,14 +223,21 @@ impl RequestProfile {
 
     fn prepare_body(
         &self,
+        model: &str,
         messages: &[Message],
         max_tokens: Option<u32>,
         stream: bool,
         response_format: Option<ResponseFormat>,
         hints: Option<&LlmRequestHints>,
     ) -> Result<PreparedChatBody> {
-        let body =
-            self.serialize_body(messages, max_tokens, stream, response_format.clone(), hints)?;
+        let body = self.serialize_body(
+            model,
+            messages,
+            max_tokens,
+            stream,
+            response_format.clone(),
+            hints,
+        )?;
         if !matches!(self, Self::GenieAiRuntime) || body.len() <= GENIE_RUNTIME_MAX_BODY_BYTES {
             return Ok(PreparedChatBody {
                 body,
@@ -239,6 +247,7 @@ impl RequestProfile {
 
         let compacted_messages = self.compact_messages(messages, GENIE_RUNTIME_MAX_BODY_BYTES);
         let compacted_body = self.serialize_body(
+            model,
             &compacted_messages,
             max_tokens,
             stream,
@@ -253,6 +262,7 @@ impl RequestProfile {
 
     fn serialize_body(
         &self,
+        model: &str,
         messages: &[Message],
         max_tokens: Option<u32>,
         stream: bool,
@@ -261,7 +271,7 @@ impl RequestProfile {
     ) -> Result<String> {
         let conversation_id = self.runtime_session_id(hints);
         let request = ChatRequest {
-            model: self.model().into(),
+            model: model.into(),
             messages: messages.to_vec(),
             max_tokens,
             temperature: Some(0.7),
@@ -274,7 +284,7 @@ impl RequestProfile {
         Ok(serde_json::to_string(&request)?)
     }
 
-    fn model(self) -> &'static str {
+    fn default_model(self) -> &'static str {
         match self {
             Self::Generic => "default",
             Self::GenieAiRuntime => "jetson-llm",
@@ -358,6 +368,7 @@ impl OpenAiCompatClient {
             host: host.to_string(),
             port,
             request_profile,
+            model: request_profile.default_model().to_string(),
             timeouts,
             auth: None,
         }
@@ -395,6 +406,7 @@ impl OpenAiCompatClient {
             host: host.to_string(),
             port,
             request_profile,
+            model: request_profile.default_model().to_string(),
             timeouts,
             auth: None,
         }
@@ -402,6 +414,14 @@ impl OpenAiCompatClient {
 
     pub fn backend_name(&self) -> &str {
         self.backend_name
+    }
+
+    pub(crate) fn with_model(mut self, model: impl AsRef<str>) -> Self {
+        let model = model.as_ref().trim();
+        if !model.is_empty() {
+            self.model = model.to_string();
+        }
+        self
     }
 
     pub(crate) fn with_bearer_token(mut self, token: impl AsRef<str>) -> Self {
@@ -519,6 +539,7 @@ impl OpenAiCompatClient {
         response_format: Option<ResponseFormat>,
     ) -> Result<String> {
         let prepared = self.request_profile.prepare_body(
+            &self.model,
             messages,
             max_tokens,
             false,
@@ -557,6 +578,7 @@ impl OpenAiCompatClient {
         hints: Option<&LlmRequestHints>,
     ) -> Result<String> {
         let prepared = self.request_profile.prepare_body(
+            &self.model,
             messages,
             max_tokens,
             false,
@@ -620,9 +642,14 @@ impl OpenAiCompatClient {
         max_tokens: Option<u32>,
         on_token: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<String> {
-        let prepared = self
-            .request_profile
-            .prepare_body(messages, max_tokens, true, None, None)?;
+        let prepared = self.request_profile.prepare_body(
+            &self.model,
+            messages,
+            max_tokens,
+            true,
+            None,
+            None,
+        )?;
         self.chat_stream_with_prepared_body(prepared, on_token)
             .await
     }
@@ -634,9 +661,14 @@ impl OpenAiCompatClient {
         hints: Option<&LlmRequestHints>,
         on_token: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<String> {
-        let prepared = self
-            .request_profile
-            .prepare_body(messages, max_tokens, true, None, hints)?;
+        let prepared = self.request_profile.prepare_body(
+            &self.model,
+            messages,
+            max_tokens,
+            true,
+            None,
+            hints,
+        )?;
         self.chat_stream_with_prepared_body(prepared, on_token)
             .await
     }
@@ -1339,6 +1371,7 @@ mod tests {
         let hints = LlmRequestHints::agent_turn("conv-abc", 256);
         let prepared = profile
             .prepare_body(
+                "default",
                 &[Message {
                     role: "user".into(),
                     content: "hello".into(),
@@ -1361,6 +1394,7 @@ mod tests {
         let hints = LlmRequestHints::agent_turn("conv-abc", 512);
         let prepared = profile
             .prepare_body(
+                "jetson-llm",
                 &[Message {
                     role: "user".into(),
                     content: "turn on the lights".into(),
@@ -1393,6 +1427,7 @@ mod tests {
         let full_prompt = format!("{static_prompt}{marker}Jared lives here.");
         let prepared = profile
             .prepare_body(
+                "jetson-llm",
                 &[
                     Message {
                         role: "system".into(),
@@ -1473,7 +1508,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_request_profile_keeps_full_default_body() {
+    fn generic_request_profile_uses_supplied_model_and_keeps_full_body() {
         let profile = RequestProfile::generic();
         let messages = vec![
             Message {
@@ -1487,12 +1522,12 @@ mod tests {
         ];
 
         let prepared = profile
-            .prepare_body(&messages, Some(64), false, None, None)
+            .prepare_body("gpt-4o-mini", &messages, Some(64), false, None, None)
             .unwrap();
         let json: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
 
         assert!(!prepared.compacted);
-        assert_eq!(json["model"], "default");
+        assert_eq!(json["model"], "gpt-4o-mini");
         assert!(
             json["messages"][0]["content"]
                 .as_str()
@@ -1523,7 +1558,7 @@ mod tests {
         ];
 
         let prepared = profile
-            .prepare_body(&messages, Some(64), false, None, None)
+            .prepare_body("jetson-llm", &messages, Some(64), false, None, None)
             .unwrap();
         let json: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
         let serialized_messages = json["messages"].to_string();
@@ -1556,7 +1591,7 @@ mod tests {
         ];
 
         let prepared = profile
-            .prepare_body(&messages, Some(64), false, None, None)
+            .prepare_body("jetson-llm", &messages, Some(64), false, None, None)
             .unwrap();
         let json: serde_json::Value = serde_json::from_str(&prepared.body).unwrap();
         let serialized_messages = json["messages"].to_string();

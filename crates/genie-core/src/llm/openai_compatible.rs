@@ -40,6 +40,17 @@ impl OpenAiCompatibleBackend {
         env_var: impl AsRef<str>,
         timeouts: LlmTimeouts,
     ) -> Self {
+        Self::from_url_with_model_and_bearer_token_env_and_timeouts(
+            url, "default", env_var, timeouts,
+        )
+    }
+
+    pub fn from_url_with_model_and_bearer_token_env_and_timeouts(
+        url: &str,
+        model: &str,
+        env_var: impl AsRef<str>,
+        timeouts: LlmTimeouts,
+    ) -> Self {
         Self {
             inner: OpenAiCompatClient::from_url_with_profile_and_timeouts(
                 "openai-compatible",
@@ -47,6 +58,7 @@ impl OpenAiCompatibleBackend {
                 RequestProfile::generic(),
                 timeouts,
             )
+            .with_model(model)
             .with_bearer_token_env(env_var),
         }
     }

@@ -165,8 +165,9 @@ impl LlmClient {
                 match provider.provider {
                     OptionalAiProviderKind::OpenAiCompatible | OptionalAiProviderKind::OpenAi => {
                         Ok(
-                            Self::from_openai_compatible_url_with_bearer_token_env_and_timeouts(
+                            Self::from_openai_compatible_url_with_model_and_bearer_token_env_and_timeouts(
                                 provider.base_url.trim(),
+                                provider.model.trim(),
                                 provider.credential_env(),
                                 timeouts,
                             ),
@@ -256,10 +257,21 @@ impl LlmClient {
         env_var: impl AsRef<str>,
         timeouts: LlmTimeouts,
     ) -> Self {
+        Self::from_openai_compatible_url_with_model_and_bearer_token_env_and_timeouts(
+            url, "default", env_var, timeouts,
+        )
+    }
+
+    pub fn from_openai_compatible_url_with_model_and_bearer_token_env_and_timeouts(
+        url: &str,
+        model: &str,
+        env_var: impl AsRef<str>,
+        timeouts: LlmTimeouts,
+    ) -> Self {
         Self {
             backend: Box::new(
-                OpenAiCompatibleBackend::from_url_with_bearer_token_env_and_timeouts(
-                    url, env_var, timeouts,
+                OpenAiCompatibleBackend::from_url_with_model_and_bearer_token_env_and_timeouts(
+                    url, model, env_var, timeouts,
                 ),
             ),
         }
